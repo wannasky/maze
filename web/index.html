@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="cn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Maze Game</title>
+</head>
+<body>
+</body>
+<script src="./wasm/wasm.js"></script>
+<script>
+    const url = new URLSearchParams(location.search);
+    let queryColumns = url.get('columns');
+    let queryRows = url.get('rows');
+    if(queryColumns) {
+        queryColumns = Number.parseInt(queryColumns);
+    }
+    if(queryRows) {
+        queryRows = Number.parseInt(queryRows);
+    }
+    const cellSize = 30, columns = queryColumns || 20, rows = queryRows || 20;
+    const width = cellSize * columns + 50, height = cellSize * rows + 50;
+    let remove_edges = [];
+    const eagleSize = 20;
+    const eaglePathHistory = [];
+    let eagleCtx, eagleImage, eagleGrayImage, eagleCoords = [(cellSize - eagleSize) / 2, (cellSize - eagleSize) / 2];
+    wasm_bindgen().then(wasm => {
+        const maze = new wasm_bindgen.Maze(columns, rows, cellSize);
+        maze.init();
+        remove_edges = maze.get_remove_edges();
+        const ctx = createCanvas(width, height);
+        let row, column, vertex_coord;
+        let edges = [];
+        for (let i = 0; i < columns * rows; i++) {
+            row = Math.floor(i / columns);
+            column = i % columns;
+            vertex_coord = [column * cellSize, row * cellSize];
+            edges = edges.concat(getEdges(vertex_coord, cellSize));
+        }
+        // 去重 排除
+        const uniqueEdges = new Set();
+        edges = edges.filter(function (edge) {
+            if (isInRemove(edge)) {
+                return false;
+            }
+            for (const ue of uniqueEdges) {
+                if (isSameEdge(edge, ue)) {
+                    return false;
+                }
+            }
+            uniqueEdges.add(edge);
+            return true;
+        });
+
+        for (const edge of edges) {
+            ctx.moveTo(edge.start[0], edge.start[1]);
+            ctx.lineTo(edge.end[0], edge.end[1]);
+        }
+        ctx.stroke();
+
+        startPlay(width, height);
+    });
+
+    function startPlay(width, height) {
+        const ctx = createCanvas(width, height);
+        eagleImage = new Image();
+        eagleGrayImage = new Image();
+        eagleImage.src = './images/icon.png';
+        eagleGrayImage.src = './images/icon2.png';
+        eagleGrayImage.onload = function () {
+        }
+        eagleImage.onload = function () {
+            eaglePathHistory.push(0);
+            ctx.drawImage(eagleImage, eagleCoords[0], eagleCoords[1], eagleSize, eagleSize);
+            eagleCtx = ctx;
+        }
+        addKeyboardEvent();
+    }
+
+    function move(deltaX, deltaY) {
+        if (!eagleCtx) return;
+        if (canMove(deltaX, deltaY)) {
+            eagleCtx.clearRect(0, 0, width, height);
+            eagleCoords = [eagleCoords[0] + deltaX * cellSize, eagleCoords[1] + deltaY * cellSize];
+            addHistory(deltaIndex(deltaX, deltaY));
+            eagleCtx.drawImage(eagleImage, eagleCoords[0], eagleCoords[1], eagleSize, eagleSize);
+            drawEagleTrack();
+            if (eaglePathHistory[eaglePathHistory.length - 1] === columns * rows - 1) {
+                alert("你赢啦...");
+            }
+        } else {
+            alert("你撞墙啦...");
+        }
+    }
+
+    function drawEagleTrack() {
+        let coord;
+        for (let i = 0; i < eaglePathHistory.length - 1; i++) {
+            coord = get_index_coord(eaglePathHistory[i]);
+            coord = [coord[0] + (cellSize - eagleSize) / 2, coord[1] + (cellSize - eagleSize) / 2];
+            eagleCtx.drawImage(eagleGrayImage, coord[0], coord[1], eagleSize, eagleSize);
+        }
+    }
+
+    function addHistory(index) {
+        if (eaglePathHistory.length < 1) {
+            eaglePathHistory.push(index);
+        } else {
+            const backIndex = eaglePathHistory[eaglePathHistory.length - 2];
+            if (backIndex === index) {
+                eaglePathHistory.pop();
+            } else {
+                eaglePathHistory.push(index);
+            }
+        }
+    }
+
+    function canMove(deltaX, deltaY) {
+        const currentIndex = eaglePathHistory[eaglePathHistory.length - 1];
+
+        // 计算此次变化经过的墙
+        const currentIndexVertexCoord = get_index_coord(currentIndex);
+        let coord = {};
+        if (deltaX > 0) {
+            coord.start = [currentIndexVertexCoord[0] + cellSize, currentIndexVertexCoord[1]];
+            coord.end = [currentIndexVertexCoord[0] + cellSize, currentIndexVertexCoord[1] + cellSize];
+        }
+        if (deltaX < 0) {
+            coord.start = [currentIndexVertexCoord[0], currentIndexVertexCoord[1]];
+            coord.end = [currentIndexVertexCoord[0], currentIndexVertexCoord[1] + cellSize];
+        }
+        if (deltaY > 0) {
+            coord.start = [currentIndexVertexCoord[0], currentIndexVertexCoord[1] + cellSize];
+            coord.end = [currentIndexVertexCoord[0] + cellSize, currentIndexVertexCoord[1] + cellSize];
+        }
+        if (deltaY < 0) {
+            coord.start = [currentIndexVertexCoord[0], currentIndexVertexCoord[1]];
+            coord.end = [currentIndexVertexCoord[0] + cellSize, currentIndexVertexCoord[1]];
+        }
+        return isInRemove(coord);
+    }
+
+    function get_index_coord(index) {
+        const column = index % columns;
+        const row = Math.floor(index / columns);
+        return [column * cellSize, row * cellSize];
+    }
+
+    function deltaIndex(deltaX, deltaY) {
+        const lastHistoryIndex = eaglePathHistory[eaglePathHistory.length - 1];
+        if (deltaX > 0) {
+            return lastHistoryIndex + 1;
+        }
+        if (deltaX < 0) {
+            return lastHistoryIndex - 1;
+        }
+        if (deltaY > 0) {
+            return lastHistoryIndex + columns;
+        }
+        if (deltaY < 0) {
+            return lastHistoryIndex - columns;
+        }
+    }
+
+    function addKeyboardEvent() {
+        function handleKeyDown(event) {
+            switch (event.key) {
+                case 'ArrowUp':
+                    move(0, -1);
+                    break;
+                case 'ArrowDown':
+                    move(0, 1);
+                    break;
+                case 'ArrowLeft':
+                    move(-1, 0);
+                    break;
+                case 'ArrowRight':
+                    move(1, 0);
+                    break;
+
+            }
+        }
+
+        window.addEventListener('keydown', handleKeyDown);
+    }
+
+    function createCanvas(width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.setAttribute('width', `${width}px`);
+        canvas.setAttribute('height', `${height}px`);
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        canvas.style.position = 'absolute';
+        document.body.appendChild(canvas);
+        const ctx = canvas.getContext('2d');
+        ctx.translate(0.5, 0.5);
+        return ctx;
+    }
+
+    function isInRemove(edge) {
+        return !!remove_edges.find(function (item) {
+            return isSameEdge(item, edge);
+        });
+    }
+
+    function isSameEdge(coord1, coord2) {
+        let c1 = coord1.start[0] === coord2.start[0] && coord1.start[1] === coord2.start[1];
+        let c2 = coord1.end[0] === coord2.end[0] && coord1.end[1] === coord2.end[1];
+        let c3 = coord1.start[0] === coord2.end[0] && coord1.start[1] === coord2.end[1];
+        let c4 = coord1.end[0] === coord2.start[0] && coord1.end[1] === coord2.start[1];
+        return (c1 && c2) || (c3 && c4);
+    }
+
+    function getEdges(vc, size) {
+        const edges = [];
+        edges.push({start: vc, end: [vc[0] + size, vc[1]]});
+        edges.push({start: [vc[0] + size, vc[1]], end: [vc[0] + size, vc[1] + size]});
+        edges.push({start: [vc[0] + size, vc[1] + size], end: [vc[0], vc[1] + size]});
+        edges.push({start: [vc[0], vc[1] + size], end: vc});
+        return edges;
+    }
+
+</script>
+</html>
